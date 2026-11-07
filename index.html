@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>HoloRec — record your camera with Ableton audio baked in</title>
+<meta name="description" content="Press play in Ableton, hit record on your phone — camera footage with the desktop audio perfectly laid in, in one file.">
+<meta name="theme-color" content="#0b0b10">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<link rel="stylesheet" href="css/style.css?v=1">
+<script src="js/vendor/qrcode.js?v=1"></script>
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+</head>
+<body>
+
+<!-- ============ LANDING ============ -->
+<main id="landing" style="display:none">
+  <div class="logo">🎬</div>
+  <h1>HoloRec</h1>
+  <p class="tag">Record your camera with what's playing in Ableton — baked into one file.<br>Press play in Ableton. Hit record on the phone. Done.</p>
+  <button id="go-desktop" class="big primary">🖥️ This is the DESKTOP (Ableton side)</button>
+  <div class="divider"><span>or</span></div>
+  <p class="tag">On the phone? Scan the desktop's QR — or enter its code:</p>
+  <div class="join-row">
+    <input id="join-code" type="text" maxlength="6" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="CODE">
+    <button id="go-phone" class="big">📱 Phone camera</button>
+  </div>
+  <p class="hint">Best on the same WiFi. The audio streams phone-ward over a direct peer connection — nothing is uploaded to a server.</p>
+  <p class="build">HoloRec build 1</p>
+</main>
+
+<!-- ============ DESKTOP ============ -->
+<main id="desktop" style="display:none">
+  <header><h1>🎬 HoloRec <span class="sub">desktop · Ableton side</span></h1>
+    <div id="d-conn" class="conn">Not connected</div></header>
+
+  <section class="card">
+    <h2>1 · Capture Ableton's audio</h2>
+    <p class="hint">Route Ableton's master out, then capture it one of two ways:</p>
+    <p><b>A — System / tab audio</b> (Chrome/Edge share dialog — tick “share audio”, or share the whole system)</p>
+    <button id="d-cap-display" class="big primary">🎧 Capture system / tab audio</button>
+    <p><b>B — Audio input device</b> (loopback / interface / virtual cable — Voicemeeter, BlackHole, VB-Cable…)</p>
+    <div class="row">
+      <select id="d-device"></select>
+      <button id="d-refresh-devices">↻</button>
+    </div>
+    <button id="d-cap-device" class="big">🎙️ Capture that input</button>
+    <p id="d-audio-status" class="hint">No audio captured yet.</p>
+    <div class="meter"><div id="d-meter-fill"></div></div>
+    <p class="hint">▲ Live level — play Ableton; if this moves, the audio is arriving.</p>
+  </section>
+
+  <section class="card">
+    <h2>2 · Phone scans this</h2>
+    <div class="code-big" id="d-code">------</div>
+    <div id="d-qr" class="qr"></div>
+    <p id="d-phone-url" class="share-link"></p>
+    <p class="hint">Same WiFi recommended. The phone opens with the room already joined.</p>
+    <button id="d-go" class="big primary" disabled>▶ Start link</button>
+  </section>
+  <p class="build">HoloRec build 1</p>
+</main>
+
+<!-- ============ PHONE ============ -->
+<main id="phone" style="display:none">
+  <header><h1>🎬 HoloRec <span class="sub">phone · room <span id="p-code-label"></span></span></h1>
+    <div id="p-conn" class="conn">Not connected</div></header>
+
+  <section class="stage">
+    <canvas id="p-canvas" width="1920" height="1296"></canvas>
+    <button id="p-start-cam" class="big primary overlay-btn">📷 Start camera</button>
+  </section>
+  <p id="p-actual-res" class="hint">Camera not started.</p>
+  <p id="p-cam-note" class="hint"></p>
+  <p id="p-audio-note" class="hint">Waiting for the desktop's Ableton audio…</p>
+
+  <section class="card controls">
+    <div class="row wrap">
+      <button id="p-flip" class="chip">🔄 Front / rear</button>
+      <button id="p-torch" class="chip" style="display:none">🔦 Torch</button>
+      <button id="p-mirror" class="chip">🪞 Mirror</button>
+      <button id="p-grid" class="chip"># Grid</button>
+      <button id="p-monitor" class="chip">🔇 Monitor off</button>
+    </div>
+    <div id="p-lenses" class="row wrap"></div>
+    <label class="field"><span>Resolution (requested)</span>
+      <select id="p-res">
+        <option value="1280x720">720p · 1280×720</option>
+        <option value="1920x1080" selected>1080p · 1920×1080</option>
+        <option value="3840x2160">4K · 3840×2160</option>
+      </select></label>
+    <label class="field"><span>Zoom <b id="p-zoom-val">1.0×</b></span>
+      <input id="p-zoom" type="range" min="1" max="5" step="0.1" value="1"></label>
+    <p id="p-zoom-note" class="hint"></p>
+    <label class="field"><span>MiniMeters strip in the video</span>
+      <select id="p-strip">
+        <option value="off">Off</option>
+        <option value="top">Above footage (extra height, baked in)</option>
+        <option value="bottom" selected>Below footage (extra height, baked in)</option>
+        <option value="overlay">Overlay (translucent, over footage)</option>
+      </select></label>
+    <label class="field"><span>Sync offset <b id="p-sync-val">0 ms</b> (+ delays audio · − delays video)</span>
+      <input id="p-sync" type="range" min="-500" max="500" step="5" value="0"></label>
+    <p id="p-sync-note" class="hint">Auto estimate appears once Ableton audio is streaming.</p>
+  </section>
+
+  <section class="recbar">
+    <div id="p-timer" class="timer">0:00</div>
+    <button id="p-rec" class="big rec">⏺ Record</button>
+  </section>
+
+  <section id="p-after" class="card" style="display:none">
+    <h2>Your take</h2>
+    <video id="p-preview" controls playsinline></video>
+    <p id="p-file-note" class="hint"></p>
+    <div class="row">
+      <button id="p-download" class="big primary">⬇ Download</button>
+      <button id="p-share" class="big">↗ Share</button>
+    </div>
+  </section>
+  <p class="build">HoloRec build 1</p>
+</main>
+
+<script type="module" src="js/app.js?v=1"></script>
+</body>
+</html>
