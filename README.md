@@ -25,15 +25,26 @@ Record your phone's camera with what's playing in Ableton on your desktop — ba
 
 ## Notes
 - Monitor is off by default (feedback) — the recording always captures the audio.
-- Build 2: STUN + TURN relay fallback (build 1 was STUN-only and failed on
-  a real network). Direct peer paths are preferred; the relay carries the
-  audio only when no direct path exists. ICE failures auto-retry with an
-  ICE restart, and the failure line reports which ICE candidate types each
-  side produced, so a screenshot is enough to debug the next step.
+- Build 5 network overhaul (after build 1's STUN-only failure and a full
+  audit + two-page signaling E2E in tests/network.mjs):
+  - TURN credentials are minted fresh in the browser in the documented
+    staticauth/coturn REST shape (HMAC-SHA1, 1h expiry) — the fixed
+    openrelayproject pair from build 2 is stale and no longer documented
+    by Metered. freestun.net is a second independent relay.
+  - Offers are only published once the phone's hello proves it is
+    listening (builds 1–4 could publish the offer + all candidates into
+    an empty room and lose them), re-offers ICE-restart so candidates
+    re-trickle, and trickle candidates arriving before the remote
+    description are queued instead of silently dropped.
+  - The MQTT library is vendored locally (js/vendor/) — no CDN dependency
+    in the connection path.
+  - ICE failures auto-retry with ICE restart, and the failure line reports
+    which ICE candidate types each side produced, so a screenshot is
+    enough to debug the next step.
 - Build 2 camera: switching lens/facing/resolution stops the old camera
   before opening the new one, caps capture at 30fps (the canvas records at
   30 anyway), and falls back down a constraint ladder instead of leaving a
   black screen.
 - Static site, no build step. Cache-busting: every asset carries `?v=BUILD`.
 
-Build 3.
+Build 5.

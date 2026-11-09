@@ -157,10 +157,22 @@ async function newPage(url) {
   /* Build-2: TURN relay must be in the ICE config (build 1 was STUN-only
    * and failed on Joshua's real network). */
   const iceUrls = await page.evaluate(async () => {
-    const m = await import('./js/net.js?v=4');
+    const m = await import('./js/net.js?v=5');
     return m.RTC_CFG.iceServers.flatMap((s) => Array.isArray(s.urls) ? s.urls : [s.urls]);
   });
   check('ICE config includes a TURN relay', iceUrls.some((u) => u.startsWith('turn:') || u.startsWith('turns:')), iceUrls.join(','));
+  /* Build-5: the staticauth TURN credentials must be minted fresh in the
+   * documented coturn REST shape — username "<expiry>:holorec" with the
+   * expiry ~1h out, credential = base64 HMAC-SHA1 (28 chars). The fixed
+   * openrelayproject/openrelayproject pair from build 2 is stale. */
+  const sa = await page.evaluate(async () => {
+    const m = await import('./js/net.js?v=5');
+    const servers = await m.buildIceServers();
+    const e = servers.find((s) => (Array.isArray(s.urls) ? s.urls.join(' ') : s.urls).includes('staticauth'));
+    return e ? { username: e.username, credential: e.credential } : null;
+  });
+  const saOk = !!sa && /^\d+:holorec$/.test(sa.username) && Math.abs(parseInt(sa.username, 10) - Math.floor(Date.now() / 1000) - 3600) < 120 && /^[A-Za-z0-9+/]{27}=$/.test(sa.credential);
+  check('staticauth TURN creds minted fresh (HMAC REST shape)', saOk, sa ? sa.username : 'missing');
   await ctx.close();
 }
 

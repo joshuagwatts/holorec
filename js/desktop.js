@@ -1,5 +1,5 @@
-import { connectMqtt, Peer } from './net.js?v=4';
-import { MeterStrip } from './meters.js?v=4';
+import { connectMqtt, Peer, buildIceServers } from './net.js?v=5';
+import { MeterStrip } from './meters.js?v=5';
 
 const $ = (id) => document.getElementById(id);
 const state = {
@@ -111,14 +111,42 @@ async function offerToPhone() {
    * offer was published before the phone had subscribed (MQTT keeps
    * nothing for late joiners), every later hello was ignored and the pair
    * never met. The TRACK is added once; the OFFER can be re-sent whenever
-   * the phone (re)announces itself and we are not LIVE yet. */
+   * the phone (re)announces itself and we are not LIVE yet.
+   * Build-5 fix: re-offers are RATE-LIMITED — the phone heartbeats hello
+   * every 4s, and build 2 answered every one with a fresh offer, churning
+   * the negotiation before ICE could finish. Now an offer goes out at
+   * most once per 8s, and never once an answer is in and ICE is under
+   * way; the heartbeat naturally retries after the window. */
   if (!state._trackAdded) {
     state._trackAdded = true;
     const t = state.audioStream.getAudioTracks()[0];
     state.peer.addAudioTrack(t, state.audioStream);
   }
   if (state._live) return;
-  await state.peer.makeOffer();
+  /* Never offer into an empty room: the first build published its offer
+   * (and all its ICE candidates) before the phone had subscribed, and
+   * MQTT keeps nothing for late joiners — the offer was gone and the
+   * candidates with it. Offers start only once a hello proves the phone
+   * is actually listening. */
+  if (!state._phoneSeen) return;
+  const pc = state.peer.pc;
+  const now = Date.now();
+  /* Once an answer is in and ICE is under way, an offer would only churn —
+   * but while we still have NO answer, re-offering is the rescue path and
+   * must stay open even in 'have-local-offer' state (the network E2E
+   * caught an earlier version of this throttle deadlocking exactly that:
+   * first offer published before the phone subscribed, every rescue hello
+   * then skipped for signalingState, answer forever impossible). */
+  if (pc.remoteDescription && (pc.connectionState === 'connecting' || pc.connectionState === 'connected')) return;
+  if (state._lastOfferAt && now - state._lastOfferAt < 8000) return;
+  const isReoffer = !!state._lastOfferAt;
+  state._lastOfferAt = now;
+  /* A re-offer must ICE-RESTART: without it the browser keeps the same
+   * ufrag and never re-trickles the candidates the phone missed (the E2E
+   * showed the phone stuck at 'checking' with zero remote candidates
+   * after a plain re-offer). A restart offer is still a valid first
+   * negotiation for a phone that never saw the original. */
+  await state.peer.makeOffer(isReoffer ? { iceRestart: true } : undefined);
 }
 
 async function startSignaling() {
@@ -130,6 +158,7 @@ async function startSignaling() {
     state.mqtt.code = state.code;
     state.broker = state.mqtt.broker;
   } catch (e) { setConn('FAILED — ' + e.message); return; }
+  const iceServers = await buildIceServers();
   state.peer = new Peer('desktop', send, {
     onState: (t) => {
       state._live = t === 'LIVE';
@@ -139,11 +168,11 @@ async function startSignaling() {
     },
     onStats: ({ rttMs }) => { if (rttMs != null) setConn('LIVE — streaming Ableton audio to the phone · latency ~' + rttMs + ' ms', true); },
     onPeerHello: () => {},
-  });
+  }, iceServers);
   /* Phone announces itself with 'hello'; (re)offer when it does, and now if audio is ready. */
   const origHandle = state.peer.handleSignal.bind(state.peer);
   state.peer.handleSignal = async (msg) => {
-    if (msg.type === 'hello') { await offerToPhone(); return; }
+    if (msg.type === 'hello') { state._phoneSeen = true; await offerToPhone(); return; }
     return origHandle(msg);
   };
   send({ type: 'desktop-here' });

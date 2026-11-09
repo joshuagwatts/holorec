@@ -8,23 +8,59 @@ export const BROKERS = [
   'wss://broker.hivemq.com:8884/mqtt',
   'wss://test.mosquitto.org:8081/mqtt',
 ];
-/* Build 2: STUN + TURN. Build 1 was STUN-only and died on Joshua's real
- * network ("FAILED — peer connection failed (NAT/UDP blocked?)"). TURN
- * relays the audio when no direct path exists; the TCP/TLS 443 entries also
- * survive networks (and Brave's stricter WebRTC policy) that block UDP.
- * Relay carries tiny Opus audio only, so the free Open Relay allowance is
- * ample. Direct paths are still preferred — TURN is only used if ICE can't
- * connect directly. */
+/* STUN + TURN. Build 1 was STUN-only and died on Joshua's real network.
+ * Build 5 corrects the TURN scheme itself: the widely copy-pasted fixed
+ * login (openrelayproject / openrelayproject) is STALE — Metered's own
+ * Open Relay page no longer documents it and now pushes signup/API keys.
+ * The one no-signup mechanism Metered still documents (for Nextcloud Talk
+ * / Matrix) is the staticauth endpoint's shared-secret scheme, the coturn
+ * TURN REST convention: username = "<expiry-unix>:<label>", credential =
+ * base64(HMAC-SHA1(secret, username)), secret = "openrelayprojectsecret".
+ * Those credentials are time-limited, so they are minted fresh in the
+ * browser at connect time by buildIceServers() below — there is no fixed
+ * password to paste. freestun.net (documented public pair free/free) is a
+ * second, independent relay. The stale fixed pair stays only as a last
+ * extra shot; ICE tries everything in parallel and uses what answers.
+ * Direct paths are still preferred — relays carry the tiny Opus audio
+ * only when no direct path exists. */
 export const RTC_CFG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun.cloudflare.com:3478' },
     { urls: 'stun:stun.relay.metered.ca:80' },
+    { urls: 'turn:freestun.net:3478', username: 'free', credential: 'free' },
+    { urls: 'turns:freestun.net:5350', username: 'free', credential: 'free' },
     { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
     { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
     { urls: 'turns:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
   ],
 };
+
+const STATICAUTH_SECRET = 'openrelayprojectsecret';
+const STATICAUTH_URLS = [
+  'turn:staticauth.openrelay.metered.ca:80',
+  'turn:staticauth.openrelay.metered.ca:443',
+  'turns:staticauth.openrelay.metered.ca:443?transport=tcp',
+];
+
+/* Mint the full ICE server list, including fresh staticauth credentials
+ * (valid 1 hour). Exported for tests: the HMAC construction is cross-checked
+ * against an independent implementation in the test suite. */
+export async function buildIceServers() {
+  const servers = RTC_CFG.iceServers.map((s) => ({ ...s }));
+  try {
+    const expiry = Math.floor(Date.now() / 1000) + 3600;
+    const username = expiry + ':holorec';
+    const enc = new TextEncoder();
+    const key = await crypto.subtle.importKey('raw', enc.encode(STATICAUTH_SECRET), { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']);
+    const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(username)));
+    let bin = '';
+    sig.forEach((b) => { bin += String.fromCharCode(b); });
+    servers.push({ urls: STATICAUTH_URLS, username, credential: btoa(bin) });
+  } catch (e) { /* WebCrypto unavailable — the static servers still apply */ }
+  return servers;
+}
 
 export function topicFor(code) { return 'holorec/v1/' + code + '/sig'; }
 
@@ -78,13 +114,22 @@ function candType(candStr) {
 }
 
 export class Peer {
-  constructor(role, sendSignal, cbs) {
+  constructor(role, sendSignal, cbs, iceServers) {
     this.role = role; this.sendSignal = sendSignal; this.cbs = cbs || {};
-    this.pc = new RTCPeerConnection(RTC_CFG);
+    this.pc = new RTCPeerConnection({ iceServers: iceServers || RTC_CFG.iceServers });
     this.statsTimer = null;
     this.restartAttempts = 0;
     this.maxRestarts = 3;
     this.localCands = {}; this.remoteCands = {};
+    /* Build-5 fix: trickle-ICE candidates that arrive BEFORE the remote
+     * description is set used to be fed straight to addIceCandidate, which
+     * throws — and the catch swallowed it, silently DROPPING exactly the
+     * fastest (host) candidates. They are queued now and flushed the
+     * moment the remote description lands. Counters make the behavior
+     * observable in diagnostics and tests. */
+    this._iceQueue = [];
+    this._remoteSet = false;
+    this.iceQueued = 0; this.iceAdded = 0; this.iceDropped = 0;
     this.everLive = false;
     this.pc.onicecandidate = (e) => {
       if (e.candidate) {
@@ -125,7 +170,7 @@ export class Peer {
       if (this.role === 'desktop') this.makeOffer({ iceRestart: true });
       else this.sendSignal({ type: 'need-restart' });
     } else if (this.cbs.onState) {
-      this.cbs.onState('FAILED — peer connection failed after ' + this.maxRestarts + ' retries. ' + this.diagText() + ' Try: phone + desktop on the same WiFi, and on the phone use Chrome (Brave\'s WebRTC privacy policy can block the direct path).');
+      this.cbs.onState('FAILED — peer connection failed after ' + this.maxRestarts + ' retries. ' + this.diagText() + ' relay×0 on both sides means no relay answered either — screenshot this line and send it to me.');
     }
   }
   addAudioTrack(track, stream) { this.pc.addTrack(track, stream); }
@@ -136,19 +181,34 @@ export class Peer {
       this.sendSignal({ type: 'offer', sdp: this.pc.localDescription });
     } catch (e) { /* a restart racing a state change is normal */ }
   }
+  async _flushIceQueue() {
+    const q = this._iceQueue.splice(0);
+    for (const cand of q) {
+      try { await this.pc.addIceCandidate(cand); this.iceAdded++; }
+      catch (e) { this.iceDropped++; }
+    }
+  }
   async handleSignal(msg) {
     try {
       if (msg.type === 'offer' && this.role === 'phone') {
         await this.pc.setRemoteDescription(msg.sdp);
+        this._remoteSet = true;
+        await this._flushIceQueue();
         const ans = await this.pc.createAnswer();
         await this.pc.setLocalDescription(ans);
         this.sendSignal({ type: 'answer', sdp: this.pc.localDescription });
       } else if (msg.type === 'answer' && this.role === 'desktop') {
         await this.pc.setRemoteDescription(msg.sdp);
-      } else if (msg.type === 'ice' && msg.candidate) {
+        this._remoteSet = true;
+        await this._flushIceQueue();
+      } else if (msg.type === 'ice' && msg.candidate && msg.candidate.candidate) {
         const t = candType(msg.candidate.candidate);
         this.remoteCands[t] = (this.remoteCands[t] || 0) + 1;
-        await this.pc.addIceCandidate(msg.candidate);
+        if (!this._remoteSet) { this._iceQueue.push(msg.candidate); this.iceQueued++; }
+        else {
+          try { await this.pc.addIceCandidate(msg.candidate); this.iceAdded++; }
+          catch (e) { this.iceDropped++; }
+        }
       } else if (msg.type === 'need-restart' && this.role === 'desktop') {
         this.makeOffer({ iceRestart: true });
       } else if (msg.type === 'hello' && this.role === 'desktop') {

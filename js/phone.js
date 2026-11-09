@@ -1,5 +1,5 @@
-import { connectMqtt, Peer } from './net.js?v=4';
-import { MeterStrip } from './meters.js?v=4';
+import { connectMqtt, Peer, buildIceServers } from './net.js?v=5';
+import { MeterStrip } from './meters.js?v=5';
 
 const $ = (id) => document.getElementById(id);
 const state = {
@@ -452,6 +452,7 @@ async function joinRoom(code) {
     }, (t) => setConn('CONNECTING — ' + t));
     state.mqtt.code = code; state.broker = state.mqtt.broker;
   } catch (e) { setConn('FAILED — ' + e.message); return; }
+  const iceServers = await buildIceServers();
   const peer = new Peer('phone', send, {
     onState: (t) => {
       if (t === 'LIVE') {
@@ -464,7 +465,7 @@ async function joinRoom(code) {
     },
     onRemoteStream: (s) => adoptRemoteStream(s),
     onStats: ({ rttMs }) => { state.rttMs = rttMs; if (rttMs != null && state.connState.startsWith('LIVE')) setConn('LIVE — Ableton audio streaming in · latency ~' + rttMs + ' ms', true); },
-  });
+  }, iceServers);
   state.peerRef = peer;
   /* Hello heartbeat: build 1 sent ONE hello — if the desktop missed it (or
    * its one offer was published before the phone subscribed), the pair never
@@ -488,7 +489,7 @@ export function initPhone(preCode) {
      they attach to the remote source when it arrives. */
   if (!meters) meters = new MeterStrip();
   $('p-code-label').textContent = preCode || '';
-  diagLog('HoloRec build 4 diagnostics · UA: ' + navigator.userAgent.slice(0, 110));
+  diagLog('HoloRec build 5 diagnostics · UA: ' + navigator.userAgent.slice(0, 110));
   if (navigator.permissions && navigator.permissions.query) {
     navigator.permissions.query({ name: 'camera' }).then((p) => diagLog('camera permission state: ' + p.state)).catch((e) => diagLog('permission query failed: ' + e.message));
   }
