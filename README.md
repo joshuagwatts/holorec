@@ -25,8 +25,15 @@ Record your phone's camera with what's playing in Ableton on your desktop — ba
 
 ## Notes
 - Monitor is off by default (feedback) — the recording always captures the audio.
-- v1 uses STUN only (no TURN): same-WiFi / friendly NAT works; hostile
-  networks may fail to connect and the app says so plainly.
+- Build 2: STUN + TURN relay fallback (build 1 was STUN-only and failed on
+  a real network). Direct peer paths are preferred; the relay carries the
+  audio only when no direct path exists. ICE failures auto-retry with an
+  ICE restart, and the failure line reports which ICE candidate types each
+  side produced, so a screenshot is enough to debug the next step.
+- Build 2 camera: switching lens/facing/resolution stops the old camera
+  before opening the new one, caps capture at 30fps (the canvas records at
+  30 anyway), and falls back down a constraint ladder instead of leaving a
+  black screen.
 - Static site, no build step. Cache-busting: every asset carries `?v=BUILD`.
 
-Build 1.
+Build 2.

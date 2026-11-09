@@ -1,5 +1,5 @@
-import { connectMqtt, Peer } from './net.js?v=1';
-import { MeterStrip } from './meters.js?v=1';
+import { connectMqtt, Peer } from './net.js?v=2';
+import { MeterStrip } from './meters.js?v=2';
 
 const $ = (id) => document.getElementById(id);
 const state = {
@@ -48,7 +48,13 @@ function adoptRemoteStream(stream) {
   meters.attach(actx, remoteSrc);
   state.audioReady = true;
   setConn(state.connState === 'LIVE' ? 'LIVE' : state.connState, state.connState === 'LIVE');
-  $('p-audio-note').textContent = 'Ableton audio connected — it will be baked into the recording.';
+  /* Build-2 honesty fix: ontrack fires when the track is ANNOUNCED, before
+   * any audio actually flows — build 1 said "connected" here while the peer
+   * was failing, which is exactly the contradiction in Joshua's screenshot.
+   * Only the LIVE state earns the word "connected". */
+  $('p-audio-note').textContent = state.connState === 'LIVE'
+    ? 'Ableton audio connected — it will be baked into the recording.'
+    : 'Ableton audio track received — connecting the stream…';
   pollStatsForAutoOffset();
 }
 /* Auto sync estimate: audio's jitter-buffer delay means the audio lags the
@@ -88,18 +94,58 @@ function setConn(text, live) {
   el.className = 'conn ' + (live ? 'live' : String(text).startsWith('FAILED') ? 'fail' : '');
 }
 
-/* ---------------- camera ---------------- */
+/* ---------------- camera ----------------
+ * Build-2 fix for the real-phone failure in Joshua's screenshot: the first
+ * camera started (1080x1920 @60fps), then a restart (lens / flip / res tap)
+ * died with "Could not start video source". Three causes, all fixed here:
+ *  1. The old track was still OPEN while the new camera was requested —
+ *     Android refuses a second camera while the first is held. Stop first.
+ *  2. Parallel startCamera() calls raced (auto-start + Start button + lens
+ *     taps). Calls are now serialized; a tap during a start just re-runs
+ *     once with the latest settings.
+ *  3. No frameRate cap — the phone picked 60fps, which several lenses
+ *     (esp. front / secondary) can't actually start. The canvas records at
+ *     30fps anyway, so cap at 30. And a failed pick now falls down a ladder
+ *     (requested -> 720p -> any camera) instead of leaving a black screen. */
+let camStartInFlight = false, camStartQueued = false;
 async function startCamera() {
-  const want = {
-    width: { ideal: state.res.w }, height: { ideal: state.res.h },
-  };
-  const constraints = { audio: false, video: state.deviceId ? { ...want, deviceId: { exact: state.deviceId } } : { ...want, facingMode: state.facing } };
+  if (camStartInFlight) { camStartQueued = true; return; }
+  camStartInFlight = true;
   try {
-    const s = await navigator.mediaDevices.getUserMedia(constraints);
-    adoptCamera(s);
-  } catch (e) {
-    $('p-cam-note').textContent = 'Camera failed: ' + e.message + ' — try a lower resolution.';
+    await startCameraOnce();
+  } finally {
+    camStartInFlight = false;
+    if (camStartQueued) { camStartQueued = false; startCamera(); }
   }
+}
+async function startCameraOnce() {
+  const target = state.deviceId
+    ? { deviceId: { exact: state.deviceId } }
+    : { facingMode: state.facing };
+  const ladder = [
+    { ...target, width: { ideal: state.res.w }, height: { ideal: state.res.h }, frameRate: { ideal: 30, max: 30 } },
+    { ...target, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } },
+    state.deviceId ? { deviceId: { ideal: state.deviceId }, frameRate: { ideal: 30 } } : { facingMode: { ideal: state.facing }, frameRate: { ideal: 30 } },
+    true,
+  ];
+  let lastErr = null;
+  for (const vc of ladder) {
+    /* Stop the current camera BEFORE opening the next one — holding the
+     * old track open is what made lens/flip switches fail on Android. */
+    if (state.camStream) {
+      state.camStream.getTracks().forEach((t) => t.stop());
+      state.camStream = null; state.camTrack = null; video.srcObject = null;
+    }
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ audio: false, video: vc });
+      adoptCamera(s);
+      $('p-cam-note').textContent = '';
+      const btn = $('p-start-cam'); if (btn) btn.style.display = 'none';
+      return;
+    } catch (e) { lastErr = e; }
+  }
+  $('p-cam-note').textContent = 'Camera failed: ' + (lastErr ? lastErr.message : 'unknown error') + ' — close any other app using the camera, then tap Start camera.';
+  const btn = $('p-start-cam'); if (btn) btn.style.display = '';
 }
 function adoptCamera(s) {
   if (state.camStream) state.camStream.getTracks().forEach((t) => t.stop());
@@ -285,7 +331,11 @@ async function joinRoom(code) {
   } catch (e) { setConn('FAILED — ' + e.message); return; }
   const peer = new Peer('phone', send, {
     onState: (t) => {
-      if (t === 'LIVE') setConn('LIVE — Ableton audio streaming in', true);
+      if (t === 'LIVE') {
+        stopHelloLoop();
+        setConn('LIVE — Ableton audio streaming in', true);
+        if (state.audioReady) $('p-audio-note').textContent = 'Ableton audio connected — it will be baked into the recording.';
+      }
       else if (t === 'CONNECTING') setConn('CONNECTING — desktop found, ICE in progress…');
       else setConn(t);
     },
@@ -293,7 +343,16 @@ async function joinRoom(code) {
     onStats: ({ rttMs }) => { state.rttMs = rttMs; if (rttMs != null && state.connState.startsWith('LIVE')) setConn('LIVE — Ableton audio streaming in · latency ~' + rttMs + ' ms', true); },
   });
   state.peerRef = peer;
+  /* Hello heartbeat: build 1 sent ONE hello — if the desktop missed it (or
+   * its one offer was published before the phone subscribed), the pair never
+   * met. Re-announce until LIVE so a lost offer always recovers. */
   send({ type: 'hello' });
+  let helloCount = 0;
+  const helloTimer = setInterval(() => {
+    if (state.connState.startsWith('LIVE') || ++helloCount > 30) { stopHelloLoop(); return; }
+    send({ type: 'hello' });
+  }, 4000);
+  function stopHelloLoop() { clearInterval(helloTimer); }
   setConn('CONNECTING — waiting for desktop offer (room ' + code + ')…');
 }
 

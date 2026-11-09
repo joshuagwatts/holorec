@@ -111,6 +111,22 @@ async function newPage(url) {
   /* mirror toggle through the real chip */
   await page.click('#p-mirror');
   check('mirror toggle sets state', await page.evaluate(() => window.__HOLOREC__.state.mirror === true));
+  /* Build-2 regression: camera RESTART (the path that died on Joshua's
+   * phone with "Could not start video source") — flip facing, which stops
+   * the old track and re-opens. Must land back on a live camera with no
+   * failure note. */
+  await page.click('#p-flip');
+  await page.waitForFunction(() => {
+    const el = document.getElementById('p-actual-res');
+    const note = document.getElementById('p-cam-note');
+    return window.__HOLOREC__.state.camStream && el && el.textContent.includes('×') && note && !note.textContent.includes('Camera failed');
+  }, null, { timeout: 15000 });
+  check('camera restart via flip succeeds (stop-first + fallback ladder)', true);
+  /* rapid double restart — serialized starts must not race/fail */
+  await page.click('#p-flip'); await page.click('#p-flip');
+  await page.waitForTimeout(1500);
+  const noteAfter = await page.textContent('#p-cam-note');
+  check('rapid double flip leaves no camera failure', !noteAfter.includes('Camera failed'), noteAfter.trim());
   /* record a real take */
   await page.click('#p-rec');
   await page.waitForFunction(() => window.__HOLOREC__.state.recording, null, { timeout: 8000 });
@@ -123,6 +139,13 @@ async function newPage(url) {
   check('recording canvas matches strip layout', rec.canvasH === hTop && rec.canvasW > 0, rec.canvasW + '×' + rec.canvasH);
   const previewSrc = await page.getAttribute('#p-preview', 'src');
   check('preview player gets the take', !!previewSrc && previewSrc.startsWith('blob:'));
+  /* Build-2: TURN relay must be in the ICE config (build 1 was STUN-only
+   * and failed on Joshua's real network). */
+  const iceUrls = await page.evaluate(async () => {
+    const m = await import('./js/net.js?v=2');
+    return m.RTC_CFG.iceServers.flatMap((s) => Array.isArray(s.urls) ? s.urls : [s.urls]);
+  });
+  check('ICE config includes a TURN relay', iceUrls.some((u) => u.startsWith('turn:') || u.startsWith('turns:')), iceUrls.join(','));
   await ctx.close();
 }
 

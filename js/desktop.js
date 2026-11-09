@@ -1,5 +1,5 @@
-import { connectMqtt, Peer } from './net.js?v=1';
-import { MeterStrip } from './meters.js?v=1';
+import { connectMqtt, Peer } from './net.js?v=2';
+import { MeterStrip } from './meters.js?v=2';
 
 const $ = (id) => document.getElementById(id);
 const state = {
@@ -106,10 +106,18 @@ export async function initDesktop(preselectedCode) {
 }
 
 async function offerToPhone() {
-  if (!state.peer || !state.audioStream || state._offered) return;
-  state._offered = true;
-  const t = state.audioStream.getAudioTracks()[0];
-  state.peer.addAudioTrack(t, state.audioStream);
+  if (!state.peer || !state.audioStream) return;
+  /* Build-2 fix: build 1 set a one-shot _offered flag, so if the first
+   * offer was published before the phone had subscribed (MQTT keeps
+   * nothing for late joiners), every later hello was ignored and the pair
+   * never met. The TRACK is added once; the OFFER can be re-sent whenever
+   * the phone (re)announces itself and we are not LIVE yet. */
+  if (!state._trackAdded) {
+    state._trackAdded = true;
+    const t = state.audioStream.getAudioTracks()[0];
+    state.peer.addAudioTrack(t, state.audioStream);
+  }
+  if (state._live) return;
   await state.peer.makeOffer();
 }
 
@@ -124,6 +132,7 @@ async function startSignaling() {
   } catch (e) { setConn('FAILED — ' + e.message); return; }
   state.peer = new Peer('desktop', send, {
     onState: (t) => {
+      state._live = t === 'LIVE';
       if (t === 'LIVE') setConn('LIVE — streaming Ableton audio to the phone', true);
       else if (t === 'CONNECTING') setConn('CONNECTING — peer linking… (phone joined, ICE in progress)');
       else setConn(t);
@@ -138,6 +147,12 @@ async function startSignaling() {
     return origHandle(msg);
   };
   send({ type: 'desktop-here' });
+  /* Announce on a heartbeat until LIVE — a phone that joins after this
+   * first message would otherwise never know the desktop is here. */
+  const hereTimer = setInterval(() => {
+    if (state._live) { clearInterval(hereTimer); return; }
+    send({ type: 'desktop-here' });
+  }, 4000);
   setConn('CONNECTING — waiting for the phone to scan/join room ' + state.code + '…');
   await offerToPhone();
 }

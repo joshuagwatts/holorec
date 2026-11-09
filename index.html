@@ -12,8 +12,8 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
-<link rel="stylesheet" href="css/style.css?v=1">
-<script src="js/vendor/qrcode.js?v=1"></script>
+<link rel="stylesheet" href="css/style.css?v=2">
+<script src="js/vendor/qrcode.js?v=2"></script>
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
 </head>
 <body>
@@ -30,8 +30,8 @@
     <input id="join-code" type="text" maxlength="6" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="CODE">
     <button id="go-phone" class="big">📱 Phone camera</button>
   </div>
-  <p class="hint">Best on the same WiFi. The audio streams phone-ward over a direct peer connection — nothing is uploaded to a server.</p>
-  <p class="build">HoloRec build 1</p>
+  <p class="hint">Best on the same WiFi. The audio streams phone-ward over a direct peer connection when one exists, with a relay fallback when it doesn't — nothing is stored on a server.</p>
+  <p class="build">HoloRec build 2</p>
 </main>
 
 <!-- ============ DESKTOP ============ -->
@@ -63,7 +63,7 @@
     <p class="hint">Same WiFi recommended. The phone opens with the room already joined.</p>
     <button id="d-go" class="big primary" disabled>▶ Start link</button>
   </section>
-  <p class="build">HoloRec build 1</p>
+  <p class="build">HoloRec build 2</p>
 </main>
 
 <!-- ============ PHONE ============ -->
@@ -123,9 +123,9 @@
       <button id="p-share" class="big">↗ Share</button>
     </div>
   </section>
-  <p class="build">HoloRec build 1</p>
+  <p class="build">HoloRec build 2</p>
 </main>
 
-<script type="module" src="js/app.js?v=1"></script>
+<script type="module" src="js/app.js?v=2"></script>
 </body>
 </html>
