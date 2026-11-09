@@ -12,8 +12,8 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
-<link rel="stylesheet" href="css/style.css?v=3">
-<script src="js/vendor/qrcode.js?v=3"></script>
+<link rel="stylesheet" href="css/style.css?v=4">
+<script src="js/vendor/qrcode.js?v=4"></script>
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
 </head>
 <body>
@@ -31,7 +31,7 @@
     <button id="go-phone" class="big">📱 Phone camera</button>
   </div>
   <p class="hint">Best on the same WiFi. The audio streams phone-ward over a direct peer connection when one exists, with a relay fallback when it doesn't — nothing is stored on a server.</p>
-  <p class="build">HoloRec build 3</p>
+  <p class="build">HoloRec build 4</p>
 </main>
 
 <!-- ============ DESKTOP ============ -->
@@ -63,7 +63,7 @@
     <p class="hint">Same WiFi recommended. The phone opens with the room already joined.</p>
     <button id="d-go" class="big primary" disabled>▶ Start link</button>
   </section>
-  <p class="build">HoloRec build 3</p>
+  <p class="build">HoloRec build 4</p>
 </main>
 
 <!-- ============ PHONE ============ -->
@@ -80,6 +80,14 @@
   <p id="p-audio-note" class="hint">Waiting for the desktop's Ableton audio…</p>
 
   <section class="card controls">
+    <label class="field"><span>Audio into the recording — wired (no WiFi / no link)</span>
+      <select id="p-audio-dev">
+        <option value="">Default input (phone mic / plugged-in USB)</option>
+      </select></label>
+    <div class="row wrap">
+      <button id="p-wired-start" class="chip">🔌 Use wired input</button>
+    </div>
+    <p class="hint">Run Ableton's output into this phone by cable — USB-C audio interface/dongle or line-in — pick it above and tap Use wired input. That replaces the desktop link entirely. Processing (echo/noise/gain) is switched off for the wired feed.</p>
     <div class="row wrap">
       <button id="p-flip" class="chip">🔄 Front / rear</button>
       <button id="p-torch" class="chip" style="display:none">🔦 Torch</button>
@@ -133,9 +141,9 @@
       <button id="p-share" class="big">↗ Share</button>
     </div>
   </section>
-  <p class="build">HoloRec build 3</p>
+  <p class="build">HoloRec build 4</p>
 </main>
 
-<script type="module" src="js/app.js?v=3"></script>
+<script type="module" src="js/app.js?v=4"></script>
 </body>
 </html>

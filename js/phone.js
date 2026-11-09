@@ -1,5 +1,5 @@
-import { connectMqtt, Peer } from './net.js?v=3';
-import { MeterStrip } from './meters.js?v=3';
+import { connectMqtt, Peer } from './net.js?v=4';
+import { MeterStrip } from './meters.js?v=4';
 
 const $ = (id) => document.getElementById(id);
 const state = {
@@ -59,7 +59,7 @@ function ensureAudioGraph() {
   delayNode.connect(monitorGain); monitorGain.connect(actx.destination);
   meters = new MeterStrip();
 }
-function adoptRemoteStream(stream) {
+function adoptRemoteStream(stream, source) {
   ensureAudioGraph();
   if (actx.state === 'suspended') actx.resume();
   state.remoteStream = stream;
@@ -68,6 +68,16 @@ function adoptRemoteStream(stream) {
   remoteSrc.connect(delayNode);
   meters.attach(actx, remoteSrc);
   state.audioReady = true;
+  if (source === 'wired') {
+    /* Build 4 (Joshua's ask): Ableton's audio arrives by CABLE — the phone
+     * takes its own wired mic/USB input as the Ableton feed. No network,
+     * no pairing, no WebRTC: the stream is local, so it is live the moment
+     * it is captured, and the note can say so plainly. */
+    state.audioSource = 'wired';
+    $('p-audio-note').textContent = 'Wired input live — audio arriving by cable will be baked into the recording.';
+    return;
+  }
+  state.audioSource = 'link';
   setConn(state.connState === 'LIVE' ? 'LIVE' : state.connState, state.connState === 'LIVE');
   /* Build-2 honesty fix: ontrack fires when the track is ANNOUNCED, before
    * any audio actually flows — build 1 said "connected" here while the peer
@@ -78,6 +88,46 @@ function adoptRemoteStream(stream) {
     : 'Ableton audio track received — connecting the stream…';
   pollStatsForAutoOffset();
 }
+
+/* ---------------- wired audio input (build 4) ---------------- */
+async function refreshAudioDevices() {
+  const sel = $('p-audio-dev');
+  if (!sel) return;
+  try {
+    const devs = await navigator.mediaDevices.enumerateDevices();
+    const ins = devs.filter((d) => d.kind === 'audioinput');
+    const cur = sel.value;
+    sel.innerHTML = '';
+    const def = document.createElement('option');
+    def.value = ''; def.textContent = 'Default input (phone mic / plugged-in USB)';
+    sel.appendChild(def);
+    ins.forEach((d, i) => {
+      const o = document.createElement('option');
+      o.value = d.deviceId; o.textContent = d.label || ('Audio input ' + (i + 1));
+      sel.appendChild(o);
+    });
+    if (cur) sel.value = cur;
+  } catch (e) {}
+}
+async function startWiredAudio() {
+  const sel = $('p-audio-dev');
+  const id = sel ? sel.value : '';
+  const audio = id
+    ? { deviceId: { exact: id }, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+    : { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ audio });
+    if (state.wiredStream) state.wiredStream.getTracks().forEach((t) => t.stop());
+    state.wiredStream = s;
+    diagLog('wired audio started: "' + (s.getAudioTracks()[0] ? s.getAudioTracks()[0].label : '?') + '"');
+    adoptRemoteStream(s, 'wired');
+    refreshAudioDevices();
+  } catch (e) {
+    diagLog('wired audio FAIL ' + e.name + ': ' + e.message);
+    $('p-audio-note').textContent = 'Wired input failed: ' + e.message + ' — check the cable/dongle is plugged in, then tap again.';
+  }
+}
+window.__HOLOREC__.startWiredAudio = startWiredAudio;
 /* Auto sync estimate: audio's jitter-buffer delay means the audio lags the
  * local camera by roughly that much; pre-set the offset slider negative
  * (delay video) by that amount, user can still override. */
@@ -438,10 +488,12 @@ export function initPhone(preCode) {
      they attach to the remote source when it arrives. */
   if (!meters) meters = new MeterStrip();
   $('p-code-label').textContent = preCode || '';
-  diagLog('HoloRec build 3 diagnostics · UA: ' + navigator.userAgent.slice(0, 110));
+  diagLog('HoloRec build 4 diagnostics · UA: ' + navigator.userAgent.slice(0, 110));
   if (navigator.permissions && navigator.permissions.query) {
     navigator.permissions.query({ name: 'camera' }).then((p) => diagLog('camera permission state: ' + p.state)).catch((e) => diagLog('permission query failed: ' + e.message));
   }
+  $('p-wired-start').onclick = () => startWiredAudio();
+  refreshAudioDevices();
   $('p-probe').onclick = () => runProbe();
   $('p-diag-copy').onclick = async (e) => {
     try { await navigator.clipboard.writeText(state.diagText || ''); e.target.textContent = '📋 Copied'; } catch (err) { e.target.textContent = '📋 Copy failed — screenshot it'; }

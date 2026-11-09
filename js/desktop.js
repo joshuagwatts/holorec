@@ -1,5 +1,5 @@
-import { connectMqtt, Peer } from './net.js?v=3';
-import { MeterStrip } from './meters.js?v=3';
+import { connectMqtt, Peer } from './net.js?v=4';
+import { MeterStrip } from './meters.js?v=4';
 
 const $ = (id) => document.getElementById(id);
 const state = {

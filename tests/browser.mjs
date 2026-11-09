@@ -95,6 +95,14 @@ async function newPage(url) {
   await page.evaluate(() => window.__HOLOREC__.injectTestAudio());
   await page.waitForFunction(() => window.__HOLOREC__.state.audioReady, null, { timeout: 10000 });
   check('test audio adopted as remote Ableton stream', true);
+  /* Build-4 wired mode: the phone's own input (fake mic here) becomes the
+   * recording's audio source with no network involved. */
+  await page.click('#p-wired-start');
+  await page.waitForFunction(() => window.__HOLOREC__.state.audioSource === 'wired', null, { timeout: 10000 });
+  const wiredNote = await page.textContent('#p-audio-note');
+  check('wired input mode engages and says so', wiredNote.includes('Wired input live'), wiredNote.trim());
+  /* restore the test-audio source for the recording checks below */
+  await page.evaluate(() => window.__HOLOREC__.injectTestAudio());
   let energy = 0;
   for (let i = 0; i < 20 && energy <= 0.01; i++) { await page.waitForTimeout(200); energy = await page.evaluate(() => window.__HOLOREC__.state.meterEnergy); }
   check('MiniMeters spectrum animates from test audio', energy > 0.01, 'specEnergy=' + energy.toFixed(3));
@@ -149,7 +157,7 @@ async function newPage(url) {
   /* Build-2: TURN relay must be in the ICE config (build 1 was STUN-only
    * and failed on Joshua's real network). */
   const iceUrls = await page.evaluate(async () => {
-    const m = await import('./js/net.js?v=3');
+    const m = await import('./js/net.js?v=4');
     return m.RTC_CFG.iceServers.flatMap((s) => Array.isArray(s.urls) ? s.urls : [s.urls]);
   });
   check('ICE config includes a TURN relay', iceUrls.some((u) => u.startsWith('turn:') || u.startsWith('turns:')), iceUrls.join(','));
