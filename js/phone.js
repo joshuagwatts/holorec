@@ -1,5 +1,5 @@
-import { connectMqtt, Peer } from './net.js?v=2';
-import { MeterStrip } from './meters.js?v=2';
+import { connectMqtt, Peer } from './net.js?v=3';
+import { MeterStrip } from './meters.js?v=3';
 
 const $ = (id) => document.getElementById(id);
 const state = {
@@ -13,6 +13,27 @@ const state = {
 };
 window.__HOLOREC__ = window.__HOLOREC__ || {};
 window.__HOLOREC__.state = state;
+
+/* ---- on-device diagnostics (build 3) -----------------------------------
+ * His phone is the only ground truth for the camera failure, and build 2's
+ * fix didn't land — so build 3 changes NO camera behavior; it records what
+ * actually happens on his hardware: every getUserMedia attempt + its exact
+ * error, the adopted track's settings, mute/end events, and whether the
+ * preview element's frames actually advance. One screenshot of this log
+ * names the cause instead of another round of guessing. */
+const diagLines = [];
+function diagLog(msg) {
+  const t = new Date();
+  const line = t.toTimeString().slice(0, 8) + ' ' + msg;
+  diagLines.push(line);
+  state.diagText = diagLines.join('\n');
+  const el = document.getElementById('p-diag');
+  if (el) el.textContent = state.diagText;
+}
+function shortJson(o) {
+  return JSON.stringify(o, (k, v) => (typeof v === 'string' && v.length > 14 ? v.slice(0, 8) + '…' : v)).slice(0, 220);
+}
+window.__HOLOREC__.diagLog = diagLog;
 
 let actx = null, remoteSrc = null, delayNode = null, monitorGain = null, recDest = null;
 let meters = null, canvas = null, gtx = null, raf = 0;
@@ -129,7 +150,9 @@ async function startCameraOnce() {
     true,
   ];
   let lastErr = null;
-  for (const vc of ladder) {
+  diagLog('camera start: facing=' + state.facing + ' deviceId=' + (state.deviceId ? state.deviceId.slice(0, 8) + '…' : 'none') + ' want=' + state.res.w + 'x' + state.res.h);
+  for (let ai = 0; ai < ladder.length; ai++) {
+    const vc = ladder[ai];
     /* Stop the current camera BEFORE opening the next one — holding the
      * old track open is what made lens/flip switches fail on Android. */
     if (state.camStream) {
@@ -138,12 +161,19 @@ async function startCameraOnce() {
     }
     try {
       const s = await navigator.mediaDevices.getUserMedia({ audio: false, video: vc });
+      const t0 = s.getVideoTracks()[0];
+      const st0 = t0 && t0.getSettings ? t0.getSettings() : {};
+      diagLog('attempt ' + (ai + 1) + ' OK: ' + (st0.width || '?') + 'x' + (st0.height || '?') + '@' + Math.round(st0.frameRate || 0) + ' label="' + (t0 ? t0.label : '') + '"');
       adoptCamera(s);
       $('p-cam-note').textContent = '';
       const btn = $('p-start-cam'); if (btn) btn.style.display = 'none';
       return;
-    } catch (e) { lastErr = e; }
+    } catch (e) {
+      lastErr = e;
+      diagLog('attempt ' + (ai + 1) + ' FAIL [' + shortJson(vc) + '] ' + e.name + ': ' + e.message + (e.constraint ? ' constraint=' + e.constraint : ''));
+    }
   }
+  diagLog('camera start: ALL attempts failed');
   $('p-cam-note').textContent = 'Camera failed: ' + (lastErr ? lastErr.message : 'unknown error') + ' — close any other app using the camera, then tap Start camera.';
   const btn = $('p-start-cam'); if (btn) btn.style.display = '';
 }
@@ -154,6 +184,16 @@ function adoptCamera(s) {
   const st = state.camTrack.getSettings ? state.camTrack.getSettings() : {};
   state.actualRes = (st.width || '?') + '×' + (st.height || '?');
   $('p-actual-res').textContent = 'Actual camera: ' + state.actualRes + (st.frameRate ? ' @' + Math.round(st.frameRate) + 'fps' : '');
+  /* Playback check: a live track with a frozen preview element is a
+   * different bug from a track that never starts — log which one it is. */
+  const trk = state.camTrack;
+  trk.onmute = () => diagLog('track event: MUTED');
+  trk.onunmute = () => diagLog('track event: unmuted');
+  trk.onended = () => diagLog('track event: ENDED');
+  const tAtAdopt = video.currentTime;
+  setTimeout(() => {
+    diagLog('playback check: readyState=' + video.readyState + ' paused=' + video.paused + ' videoSize=' + video.videoWidth + 'x' + video.videoHeight + ' trackReady=' + trk.readyState + ' trackMuted=' + trk.muted + ' framesAdvancing=' + (video.currentTime > tAtAdopt));
+  }, 1800);
   refreshLensButtons();
   applyNativeZoomCaps();
 }
@@ -182,6 +222,7 @@ async function refreshLensButtons() {
   try {
     const devs = await navigator.mediaDevices.enumerateDevices();
     const vids = devs.filter((d) => d.kind === 'videoinput');
+    diagLog('videoinputs (' + vids.length + '): ' + vids.map((d, i) => i + ':"' + (d.label || '?') + '"').join(' | '));
     const box = $('p-lenses'); box.innerHTML = '';
     vids.forEach((d, i) => {
       const label = (d.label || '').toLowerCase();
@@ -198,6 +239,38 @@ async function refreshLensButtons() {
     if (!vids.length) box.innerHTML = '<span class="hint">Lens list appears after camera permission.</span>';
   } catch (e) {}
 }
+
+/* Clean-room camera probe: bare getUserMedia calls with NO app
+ * constraints, one facing at a time, app camera stopped first. Separates
+ * "this browser/device won't hand over a camera at all" from "the app's
+ * picks are the problem" in a single tap. */
+async function runProbe() {
+  diagLog('— PROBE start (app camera stopped) —');
+  if (state.camStream) {
+    state.camStream.getTracks().forEach((t) => t.stop());
+    state.camStream = null; state.camTrack = null; video.srcObject = null;
+  }
+  const tries = [
+    ['any camera {video:true}', { video: true }],
+    ['rear {facingMode:environment}', { video: { facingMode: 'environment' } }],
+    ['front {facingMode:user}', { video: { facingMode: 'user' } }],
+    ['any camera 720p max30', { video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { max: 30 } } }],
+  ];
+  for (const [name, c] of tries) {
+    try {
+      const s = await navigator.mediaDevices.getUserMedia(c);
+      const t = s.getVideoTracks()[0];
+      const st = t.getSettings ? t.getSettings() : {};
+      diagLog('probe ' + name + ': OK ' + (st.width || '?') + 'x' + (st.height || '?') + '@' + Math.round(st.frameRate || 0) + ' label="' + t.label + '"');
+      s.getTracks().forEach((x) => x.stop());
+    } catch (e) {
+      diagLog('probe ' + name + ': FAIL ' + e.name + ': ' + e.message);
+    }
+  }
+  diagLog('— PROBE end, restarting app camera —');
+  startCamera();
+}
+window.__HOLOREC__.runProbe = runProbe;
 
 /* ---------------- composite canvas + recording ---------------- */
 function layoutDims() {
@@ -365,7 +438,15 @@ export function initPhone(preCode) {
      they attach to the remote source when it arrives. */
   if (!meters) meters = new MeterStrip();
   $('p-code-label').textContent = preCode || '';
-  $('p-start-cam').onclick = async () => { await startCamera(); $('p-start-cam').style.display = 'none'; };
+  diagLog('HoloRec build 3 diagnostics · UA: ' + navigator.userAgent.slice(0, 110));
+  if (navigator.permissions && navigator.permissions.query) {
+    navigator.permissions.query({ name: 'camera' }).then((p) => diagLog('camera permission state: ' + p.state)).catch((e) => diagLog('permission query failed: ' + e.message));
+  }
+  $('p-probe').onclick = () => runProbe();
+  $('p-diag-copy').onclick = async (e) => {
+    try { await navigator.clipboard.writeText(state.diagText || ''); e.target.textContent = '📋 Copied'; } catch (err) { e.target.textContent = '📋 Copy failed — screenshot it'; }
+  };
+  $('p-start-cam').onclick = async () => { await startCamera(); };
   $('p-flip').onclick = () => { state.facing = state.facing === 'user' ? 'environment' : 'user'; state.deviceId = null; state.mirror = state.facing === 'user' ? state.mirror : state.mirror; startCamera(); };
   $('p-torch').onclick = toggleTorch;
   $('p-mirror').onclick = (e) => { state.mirror = !state.mirror; e.target.classList.toggle('on', state.mirror); };

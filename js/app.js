@@ -6,10 +6,10 @@ const room = (params.get('room') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').
 
 async function go() {
   if (mode === 'desktop') {
-    const m = await import('./desktop.js?v=2');
+    const m = await import('./desktop.js?v=3');
     m.initDesktop(room || null);
   } else if (mode === 'phone') {
-    const m = await import('./phone.js?v=2');
+    const m = await import('./phone.js?v=3');
     m.initPhone(room || null);
   } else {
     document.querySelectorAll('main').forEach((x) => { x.style.display = 'none'; });

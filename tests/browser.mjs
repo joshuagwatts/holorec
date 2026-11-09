@@ -127,6 +127,13 @@ async function newPage(url) {
   await page.waitForTimeout(1500);
   const noteAfter = await page.textContent('#p-cam-note');
   check('rapid double flip leaves no camera failure', !noteAfter.includes('Camera failed'), noteAfter.trim());
+  /* Build-3 diagnostics: the on-device log must record attempts and the
+   * playback/frame check, and the probe button must exist. */
+  await page.waitForFunction(() => window.__HOLOREC__.state.diagText && window.__HOLOREC__.state.diagText.includes('playback check'), null, { timeout: 15000 });
+  const diag = await page.evaluate(() => window.__HOLOREC__.state.diagText);
+  check('diag log records a successful camera attempt', /attempt \d+ OK/.test(diag));
+  check('diag playback check sees frames advancing', diag.includes('framesAdvancing=true'), diag.split('\n').filter((l) => l.includes('playback check')).join(' ; ').slice(0, 160));
+  check('diag probe button present', !!(await page.$('#p-probe')));
   /* record a real take */
   await page.click('#p-rec');
   await page.waitForFunction(() => window.__HOLOREC__.state.recording, null, { timeout: 8000 });
@@ -142,7 +149,7 @@ async function newPage(url) {
   /* Build-2: TURN relay must be in the ICE config (build 1 was STUN-only
    * and failed on Joshua's real network). */
   const iceUrls = await page.evaluate(async () => {
-    const m = await import('./js/net.js?v=2');
+    const m = await import('./js/net.js?v=3');
     return m.RTC_CFG.iceServers.flatMap((s) => Array.isArray(s.urls) ? s.urls : [s.urls]);
   });
   check('ICE config includes a TURN relay', iceUrls.some((u) => u.startsWith('turn:') || u.startsWith('turns:')), iceUrls.join(','));

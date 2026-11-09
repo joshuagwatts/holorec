@@ -12,8 +12,8 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
-<link rel="stylesheet" href="css/style.css?v=2">
-<script src="js/vendor/qrcode.js?v=2"></script>
+<link rel="stylesheet" href="css/style.css?v=3">
+<script src="js/vendor/qrcode.js?v=3"></script>
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
 </head>
 <body>
@@ -31,7 +31,7 @@
     <button id="go-phone" class="big">📱 Phone camera</button>
   </div>
   <p class="hint">Best on the same WiFi. The audio streams phone-ward over a direct peer connection when one exists, with a relay fallback when it doesn't — nothing is stored on a server.</p>
-  <p class="build">HoloRec build 2</p>
+  <p class="build">HoloRec build 3</p>
 </main>
 
 <!-- ============ DESKTOP ============ -->
@@ -63,7 +63,7 @@
     <p class="hint">Same WiFi recommended. The phone opens with the room already joined.</p>
     <button id="d-go" class="big primary" disabled>▶ Start link</button>
   </section>
-  <p class="build">HoloRec build 2</p>
+  <p class="build">HoloRec build 3</p>
 </main>
 
 <!-- ============ PHONE ============ -->
@@ -109,6 +109,16 @@
     <p id="p-sync-note" class="hint">Auto estimate appears once Ableton audio is streaming.</p>
   </section>
 
+  <section class="card">
+    <h2>Camera diagnostics</h2>
+    <pre id="p-diag" style="white-space:pre-wrap;word-break:break-word;font-size:11px;line-height:1.5;max-height:260px;overflow:auto;margin:0 0 10px">Waiting for camera…</pre>
+    <div class="row wrap">
+      <button id="p-probe" class="chip">🧪 Probe cameras</button>
+      <button id="p-diag-copy" class="chip">📋 Copy log</button>
+    </div>
+    <p class="hint">Camera black? Tap Start camera, wait 3 seconds, then screenshot this box. If it's still black, tap Probe cameras, wait for it to finish, and screenshot again.</p>
+  </section>
+
   <section class="recbar">
     <div id="p-timer" class="timer">0:00</div>
     <button id="p-rec" class="big rec">⏺ Record</button>
@@ -123,9 +133,9 @@
       <button id="p-share" class="big">↗ Share</button>
     </div>
   </section>
-  <p class="build">HoloRec build 2</p>
+  <p class="build">HoloRec build 3</p>
 </main>
 
-<script type="module" src="js/app.js?v=2"></script>
+<script type="module" src="js/app.js?v=3"></script>
 </body>
 </html>
